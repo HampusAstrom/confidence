@@ -2,12 +2,22 @@ import os
 # Turn off some memory warning by changing warning level before loading module
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 import tensorflow as tf
+import numpy as np
 
+from tensorflow.keras import layers
 from tensorflow.keras.layers import Dense, Flatten, Conv2D
 from tensorflow.keras import Model
 
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
+
+from datetime import datetime
+
+from tensorflow import keras
+import tensorboard
+tensorboard.__version__
+
+print("TensorFlow version: ", tf.__version__)
 
 config = ConfigProto()
 config.gpu_options.allow_growth = True
@@ -20,6 +30,90 @@ session = InteractiveSession(config=config)
 
 """ Constrain resource usage """
 
+
+def cifar10_main():
+  """ Model """
+  inputs = keras.Input(shape=(32, 32, 3), name="img")
+  x = layers.Conv2D(32, 3, activation="relu")(inputs)
+  x = layers.Conv2D(64, 3, activation="relu")(x)
+  block_1_output = layers.MaxPooling2D(3)(x)
+
+  x = layers.Conv2D(64, 3, activation="relu", padding="same")(block_1_output)
+  x = layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+  block_2_output = layers.add([x, block_1_output])
+
+  x = layers.Conv2D(64, 3, activation="relu", padding="same")(block_2_output)
+  x = layers.Conv2D(64, 3, activation="relu", padding="same")(x)
+  block_3_output = layers.add([x, block_2_output])
+
+  x = layers.Conv2D(64, 3, activation="relu")(block_3_output)
+  x = layers.GlobalAveragePooling2D()(x)
+  x = layers.Dense(256, activation="relu")(x)
+  x = layers.Dropout(0.5)(x)
+  outputs = layers.Dense(10)(x)
+
+  model = keras.Model(inputs, outputs, name="toy_resnet")
+  # Vizualize
+  model.summary()
+  keras.utils.plot_model(model, "mini_resnet.png", show_shapes=True)
+
+  """ Import data and preprocess """
+  (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
+
+  x_train = x_train.astype("float32") / 255.0
+  x_test = x_test.astype("float32") / 255.0
+  y_train = keras.utils.to_categorical(y_train, 10)
+  y_test = keras.utils.to_categorical(y_test, 10)
+
+  """ Compile model with loss and optimizer """
+
+  model.compile(
+      optimizer=keras.optimizers.RMSprop(1e-3),
+      loss=keras.losses.CategoricalCrossentropy(from_logits=True),
+      metrics=["acc"],
+  )
+
+  """ Fit """
+  # We restrict the data to the first 1000 samples so as to limit execution time
+  # on Colab. Try to train on the entire dataset until convergence!
+  model.fit(x_train[:1000], y_train[:1000], batch_size=64, epochs=10, validation_split=0.2)
+
+
+
+def fashion_mnist_main():
+  # Define the model.
+  sel = 3
+  if sel == 1:
+    model = keras.models.Sequential([
+        keras.layers.Flatten(input_shape=(28, 28)),
+        keras.layers.Dense(32, activation='relu'),
+        keras.layers.Dropout(0.2),
+        keras.layers.Dense(10, activation='softmax')
+    ])
+  elif sel == 2:
+    model = keras.Sequential()
+    model.add(keras.applications.ResNet50(include_top=True,
+                  pooling='avg',
+                  weights=None,
+                  input_shape=(28, 28)))
+  else:
+    model = MyModel()
+
+  model.compile(
+      optimizer='adam',
+      loss='sparse_categorical_crossentropy',
+      metrics=['accuracy'])
+
+  (train_images, train_labels), _ = keras.datasets.fashion_mnist.load_data()
+  train_images = train_images / 255.0
+
+  # Train the model.
+  model.fit(
+      train_images,
+      train_labels,
+      batch_size=64,
+      epochs=5,
+      callbacks=[tensorboard_callback])
 
 """ Base model """
 class MyModel(Model):
@@ -35,15 +129,24 @@ class MyModel(Model):
     x = self.flatten(x)
     x = self.d1(x)
     return self.d2(x)
+  # Define the Keras TensorBoard callback.
+  logdir="logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+  tensorboard_callback = keras.callbacks.TensorBoard(log_dir=logdir)
 
-""" Import model instead """
+""" Base model """
+class MyModel(Model):
+  def __init__(self):
+    super(MyModel, self).__init__()
+    self.conv1 = Conv2D(32, 3, activation='relu')
+    self.flatten = Flatten()
+    self.d1 = Dense(128, activation='relu')
+    self.d2 = Dense(10)
 
-if False:
-  model = Sequential()
-
-  model.add(ResNet50(include_top=True,
-                pooling='avg',
-                weights=resnet_weight_paths))
+  def call(self, x):
+    x = self.conv1(x)
+    x = self.flatten(x)
+    x = self.d1(x)
+    return self.d2(x)
 
 def main():
   """ Import data """
@@ -130,4 +233,6 @@ def main():
 
 if __name__ == "__main__":
   with tf.device('/CPU:0'):
-    main()
+    #main()
+    #fashion_mnist_main()
+    cifar10_main()
