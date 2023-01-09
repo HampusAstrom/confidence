@@ -28,9 +28,6 @@ session = InteractiveSession(config=config)
 #print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 #print("GPU devices Available: ", tf.config.list_physical_devices('GPU'))
 
-""" Constrain resource usage """
-
-
 def cifar10_main():
   """ Model """
   inputs = keras.Input(shape=(32, 32, 3), name="img")
@@ -48,14 +45,20 @@ def cifar10_main():
 
   x = layers.Conv2D(64, 3, activation="relu")(block_3_output)
   x = layers.GlobalAveragePooling2D()(x)
-  x = layers.Dense(256, activation="relu")(x)
-  x = layers.Dropout(0.5)(x)
-  outputs = layers.Dense(10)(x)
+  flattened_output = layers.Dense(256, activation="relu")(x)
+  x = layers.Dropout(0.5)(flattened_output)
+  main_outputs = layers.Dense(10)(x)
 
-  model = keras.Model(inputs, outputs, name="toy_resnet")
+  """ Confidence network (grafted on) """
+  x = layers.Dense(64)(flattened_output)
+  x = layers.concatenate([x, main_outputs])
+  confidence_output = layers.Dense(1)(x)
+
+  main_model = keras.Model(inputs, main_outputs, name="toy_resnet")
+  confidence_model = keras.Model(inputs, confidence_output, name="toy_resnet_confidence")
   # Vizualize
-  model.summary()
-  keras.utils.plot_model(model, "mini_resnet.png", show_shapes=True)
+  main_model.summary()
+  keras.utils.plot_model(main_model, "mini_resnet.png", show_shapes=True)
 
   """ Import data and preprocess """
   (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
@@ -67,17 +70,63 @@ def cifar10_main():
 
   """ Compile model with loss and optimizer """
 
-  model.compile(
+  main_model.compile(
       optimizer=keras.optimizers.RMSprop(1e-3),
       loss=keras.losses.CategoricalCrossentropy(from_logits=True),
       metrics=["acc"],
   )
 
-  """ Fit """
-  # We restrict the data to the first 1000 samples so as to limit execution time
-  # on Colab. Try to train on the entire dataset until convergence!
-  model.fit(x_train[:1000], y_train[:1000], batch_size=64, epochs=10, validation_split=0.2)
+  """ Tensorboard callbacks """
+  # Define the Keras TensorBoard callback.
+  logdir_main="logs/fit_main/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+  tensorboard_callback_main = keras.callbacks.TensorBoard(log_dir=logdir_main)
+  logdir_confidence="logs/fit_confidence/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+  tensorboard_callback_confidence = keras.callbacks.TensorBoard(log_dir=logdir_confidence)
 
+  """ Fit """
+  main_model.fit(x_train,
+                 y_train,
+                 batch_size=64,
+                 epochs=20,
+                 validation_split=0.2,
+                 callbacks=[tensorboard_callback_main])
+
+  """ CONFIDENCE MODEL FITTING """
+
+  """ Freeze base model """
+
+  main_model.trainable = False
+  confidence_model.summary()
+  keras.utils.plot_model(confidence_model, "mini_resnet_confidence.png", show_shapes=True)
+
+  """ Compile confidence model with loss and optimizer """
+
+  confidence_model.compile(
+      optimizer=keras.optimizers.RMSprop(1e-3),
+      loss=keras.losses.MeanAbsoluteError(),
+      metrics=["acc"],
+  )
+
+  """ Produce dataset for confidence by predicting with main network """
+  y_pred_train = main_model.predict(x_train)
+  true_ind = np.argmax(y_train,axis=1)
+  pred_ind = np.argmax(y_pred_train,axis=1)
+  y_conf_train = np.zeros(len(pred_ind))
+  y_conf_train[true_ind == pred_ind] = 1
+
+  """ Fit """
+  confidence_model.fit(x_train,
+                       y_conf_train,
+                       batch_size=64,
+                       epochs=20,
+                       validation_split=0.2,
+                       callbacks=[tensorboard_callback_confidence])
+
+  """ Check confidence prediction """
+
+  confidence = confidence_model.predict(x_train[:3])
+  print(confidence)
+  print(y_conf_train[:3])
 
 
 def fashion_mnist_main():
